@@ -1,0 +1,41 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging / build artifacts
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments / local env files
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Documentation workspace notes (local planning docs)
+/_docs/
+
+# Separate sub-projects (each has its own repo/gitignore)
+/earthlink-server/
+/earthlink-cli/
+/earthlink-desktop/
+/earthlink-web/
+
+# Local runtime data and logs
+data/
+*.log
