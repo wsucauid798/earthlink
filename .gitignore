@@ -1,3 +1,6 @@
+# Claude Code
+.claude/
+
 # OS / editor
 .DS_Store
 Thumbs.db
@@ -35,6 +38,8 @@ venv/
 /earthlink-cli/
 /earthlink-desktop/
 /earthlink-web/
+/earthlink-mobile/
+/earthlink-website/
 
 # Local runtime data and logs
 data/
