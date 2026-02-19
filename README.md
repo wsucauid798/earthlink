@@ -8,10 +8,12 @@ EarthLink simulates a living world where autonomous agents explore, learn, and i
 
 | Repository | Description |
 |---|---|
-| [earthlink-server](https://github.com/wsucauid798/earthlink-server) | World simulation server |
-| [earthlink-desktop](https://github.com/wsucauid798/earthlink-desktop) | Desktop application |
-| [earthlink-cli](https://github.com/wsucauid798/earthlink-cli) | Command-line interface |
-| [earthlink-web](https://github.com/wsucauid798/earthlink-web) | Web client |
+| [earthlink-server](https://github.com/wsucauid798/earthlink-server) | Python backend — world simulation, agent lifecycle, REST API, and WebSocket streaming |
+| [earthlink-desktop](https://github.com/wsucauid798/earthlink-desktop) | Tauri + React desktop app — interactive map viewer with real-time agent tracking |
+| [earthlink-web](https://github.com/wsucauid798/earthlink-web) | Vite + React web client — browser-based viewer for the simulation |
+| [earthlink-mobile](https://github.com/wsucauid798/earthlink-mobile) | Mobile app — iOS and Android client |
+| [earthlink-cli](https://github.com/wsucauid798/earthlink-cli) | Command-line interface — terminal access to the world and agents |
+| [earthlink-website](https://github.com/Yuxi-Labs/earthlink-website) | Earthlink's showcase website |
 
 ## License
 
