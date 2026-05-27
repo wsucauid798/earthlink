@@ -1,0 +1,162 @@
+# EarthLink — production compose
+#
+# Runs from /home/earthlink/docker-compose.prod.yml on the server.
+# `docker compose` auto-loads the `.env` sitting next to it.
+#
+# Key differences from the dev compose:
+#   - `earthlink-server` image is PULLED from GHCR, not built from source.
+#   - No host port publishing except for Caddy (80/443 + 443/udp for HTTP/3).
+#   - All services on the external `earthlink` network (created by bootstrap.sh).
+#   - All persistent state on Docker-managed named volumes (no host bind mounts).
+#   - `restart: unless-stopped` everywhere.
+#   - Secrets sourced from .env, never hardcoded.
+
+services:
+
+  # --- Postgres (primary relational + pgvector + Timescale + AGE later) ---
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - earthlink_postgres:/var/lib/postgresql/data
+    networks: [earthlink]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis (EarthProxy TTL cache + future Streams event bus) ------------
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - earthlink_redis:/data
+    networks: [earthlink]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Chroma (will be reframed as world semantic layer per S79) ----------
+
+  chroma:
+    image: chromadb/chroma:1.5.0
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /data
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - earthlink_chroma:/data
+    networks: [earthlink]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- EarthLink server (FastAPI + world tick loop + Ray actors) ----------
+
+  server:
+    image: ghcr.io/${GHCR_OWNER}/earthlink-server:${EARTHLINK_SERVER_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "4433:4433/udp"   # WebTransport QUIC endpoint
+    # Per-container file-descriptor limits. Default Docker inherits ~1024 soft
+    # from the daemon, which is well below what 1000 agents x 21 adapters
+    # need for concurrent HTTP fan-out (saw EMFILE: Too many open files
+    # at scale on 2026-04-28).
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      EARTHLINK_DB_HOST: db
+      EARTHLINK_DB_PORT: 5432
+      EARTHLINK_DB_USER: ${POSTGRES_USER}
+      EARTHLINK_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      EARTHLINK_DB_NAME: ${POSTGRES_DB}
+      EARTHLINK_REDIS_URL: redis://redis:6379/0
+      EARTHLINK_CHROMA_HOST: chroma
+      EARTHLINK_CHROMA_PORT: 8000
+      # World tunables (sourced from .env, default if unset)
+      EARTHLINK_AGENT_COUNT: ${EARTHLINK_AGENT_COUNT:-300}
+      # World stream transport: WebTransport over QUIC
+      EARTHLINK_WT_HOST: 0.0.0.0
+      EARTHLINK_WT_PORT: 4433
+      EARTHLINK_WT_PATH: /wt/world
+      # WT cert MUST be browser-trusted (Chrome rejects untrusted certs over
+      # WebTransport with no UI fallback). We mount Caddy's ACME storage
+      # read-only and read the Let's Encrypt cert it auto-issues + renews
+      # for wt.earthlink.yuxilabs.com via Cloudflare DNS-01.
+      EARTHLINK_WT_CERT_PATH: /caddy_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/wt.earthlink.yuxilabs.com/wt.earthlink.yuxilabs.com.crt
+      EARTHLINK_WT_KEY_PATH: /caddy_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/wt.earthlink.yuxilabs.com/wt.earthlink.yuxilabs.com.key
+      EARTHLINK_WT_PUBLIC_URL: ${EARTHLINK_WT_PUBLIC_URL}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      chroma: {condition: service_healthy}
+    networks: [earthlink]
+    deploy:
+      resources:
+        reservations:
+          memory: 4g
+    volumes:
+      - /home/earthlink/certs:/certs:ro
+      # Caddy's ACME storage — gives the WT server access to the
+      # Let's Encrypt cert Caddy auto-issues + renews for wt.* via DNS-01.
+      - earthlink_caddy_data:/caddy_data:ro
+
+  # --- Caddy (reverse proxy + auto-TLS + only host-published ports) -------
+  # Custom build: stock caddy:2 + caddy-dns/cloudflare plugin so it can
+  # handle DNS-01 challenges for hosts that bypass CF's HTTP proxy.
+
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: earthlink/caddy:cloudflare
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC) — kept open; CF can negotiate it on the origin leg
+    environment:
+      # Cloudflare API token with Zone:DNS:Edit on yuxilabs.com — used by
+      # the cloudflare DNS plugin to publish ACME _acme-challenge TXT records.
+      CF_API_TOKEN: ${CF_API_TOKEN}
+    volumes:
+      - /home/earthlink/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Cloudflare Origin CA cert + key (D12). Generated in CF dashboard,
+      # placed on the host before first start. See DEPLOY.md.
+      - /home/earthlink/certs:/etc/caddy/certs:ro
+      - earthlink_caddy_data:/data
+      - earthlink_caddy_config:/config
+    networks: [earthlink]
+    depends_on:
+      - server
+
+# --- Network: created out-of-band by deploy/bootstrap.sh -------------------
+
+networks:
+  earthlink:
+    name: earthlink
+    external: true
+
+# --- Named volumes: managed by Docker, NOT bind-mounted ---------------------
+
+volumes:
+  earthlink_postgres:
+  earthlink_redis:
+  earthlink_chroma:
+  earthlink_caddy_data:
+  earthlink_caddy_config:

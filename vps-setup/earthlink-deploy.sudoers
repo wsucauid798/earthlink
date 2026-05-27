@@ -1,0 +1,18 @@
+# Scoped NOPASSWD sudo rule for the CI-driven deploy.
+#
+# Grants `wsawyerr` permission to run EXACTLY the systemctl restart command
+# without a password — needed because GitHub Actions ssh-action cannot
+# answer interactive sudo prompts.
+#
+# Install on the VPS as root:
+#   sudo install -m 0440 -o root -g root \
+#     /tmp/earthlink-deploy.sudoers /etc/sudoers.d/earthlink-deploy
+#   sudo visudo -c -f /etc/sudoers.d/earthlink-deploy   # validate
+#
+# This grant is intentionally narrow — only ONE command, ONE service.
+# It does NOT make wsawyerr a passwordless sudoer in general.
+
+wsawyerr ALL=(ALL) NOPASSWD: /bin/systemctl restart earthlink-stack
+wsawyerr ALL=(ALL) NOPASSWD: /usr/bin/bash /tmp/install.sh
+wsawyerr ALL=(ALL) NOPASSWD: /usr/bin/bash /tmp/bootstrap.sh
+wsawyerr ALL=(ALL) NOPASSWD: /usr/bin/bash /tmp/setup-ci-deploy.sh

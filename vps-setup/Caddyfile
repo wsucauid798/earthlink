@@ -1,0 +1,71 @@
+# EarthLink — Caddy reverse proxy (Cloudflare-fronted origin)
+#
+# Lives at /home/earthlink/Caddyfile on the server, mounted read-only into
+# the caddy container.
+#
+# TLS architecture:
+#   Browser  ──TLS (GTS edge cert)──>  Cloudflare  ──TLS (Origin CA cert)──>  Caddy on this VPS
+#
+# The browser-facing cert is Cloudflare's universal SSL (Google Trust Services).
+# This config terminates the CF↔origin leg using a Cloudflare Origin CA cert
+# mounted at /etc/caddy/certs/. NO Let's Encrypt issuance happens here —
+# Cloudflare must be set to SSL/TLS mode = Full (strict).
+
+{
+    # No global ACME directives — we are not auto-issuing.
+    # email is kept only for any internal CA fallback Caddy might want to log.
+    email ws.dev.mxb@outlook.com
+
+    # Optional but useful: tell Caddy which IPs are trusted to send X-Forwarded-*.
+    # Uncomment + populate with Cloudflare's published ranges once D27 lands.
+    # servers {
+    #     trusted_proxies static 173.245.48.0/20 103.21.244.0/22 ...
+    # }
+}
+
+# --- Apex: EarthLink API (REST only; world stream is direct WT/QUIC) -------
+
+earthlink.yuxilabs.com {
+    tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+
+    encode zstd gzip
+
+    # CF-Connecting-IP is the real client IP after Cloudflare; pass it on so
+    # FastAPI can log the origin client rather than the CF edge.
+    reverse_proxy server:8000 {
+        header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+    }
+}
+
+# --- WebTransport host: cert provisioning only -----------------------------
+# WT runs DIRECTLY on the server container (UDP/4433), bypassing Caddy on the
+# data path. But Chrome only accepts WebTransport over a publicly-trusted TLS
+# cert, and the Cloudflare Origin CA cert isn't browser-trusted.
+#
+# This block exists purely so Caddy obtains and auto-renews a real
+# Let's Encrypt cert for wt.earthlink.yuxilabs.com via the Cloudflare
+# DNS-01 challenge. The cert lands in Caddy's data volume; the server
+# container mounts that volume read-only and loads the cert into aioquic.
+#
+# DNS for wt.earthlink.yuxilabs.com is grey-cloud (DNS only, A → VPS),
+# so HTTPS GET to this hostname does hit Caddy here on TCP/443 and serves
+# the placeholder response. Browser WT traffic goes direct to UDP/4433.
+
+wt.earthlink.yuxilabs.com {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+    respond "wt.earthlink — WebTransport endpoint runs on UDP/4433" 200
+}
+
+# --- Future routes (uncomment as services come online) ---------------------
+#
+# minio.earthlink.yuxilabs.com {
+#     tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+#     reverse_proxy minio:9001
+# }
+#
+# grafana.earthlink.yuxilabs.com {
+#     tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+#     reverse_proxy grafana:3000
+# }

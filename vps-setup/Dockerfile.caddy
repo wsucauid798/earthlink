@@ -1,0 +1,14 @@
+# Custom Caddy with the Cloudflare DNS plugin, needed for DNS-01 ACME
+# challenges so we can obtain publicly-trusted TLS certs for hosts that
+# bypass Cloudflare's HTTP proxy (e.g. wt.earthlink.yuxilabs.com — DNS-only
+# grey cloud, direct UDP/4433 for WebTransport, which browsers won't accept
+# without a publicly-trusted cert).
+#
+# Build is performed by docker compose (see `build:` on the caddy service).
+
+FROM caddy:2-builder AS builder
+RUN xcaddy build \
+    --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

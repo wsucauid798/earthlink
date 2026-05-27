@@ -1,0 +1,34 @@
+[Unit]
+Description=EarthLink stack (Docker Compose)
+Documentation=https://github.com/yuxilabs/earthlink
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+User=earthlink
+Group=earthlink
+WorkingDirectory=/home/earthlink
+
+# Pull latest image(s) before bringing the stack up. --ignore-buildable
+# skips services with a `build:` directive (e.g. our custom caddy image),
+# which `pull` otherwise errors on. Quiet to avoid flooding the journal.
+ExecStartPre=/usr/bin/docker compose -f docker-compose.prod.yml pull --quiet --ignore-buildable
+
+# Bring everything up in detached mode. `up -d` automatically builds any
+# services with a `build:` directive that don't have a current image.
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up -d
+
+# Stop the stack cleanly on shutdown / restart.
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+
+# Give the stack room to start (image pulls + Postgres/Chroma readiness).
+# 1800s (30 min) accommodates slow VPS networks during first/refreshed pulls.
+# A typical re-start with cached images takes seconds.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
