@@ -13,10 +13,13 @@
 
 services:
 
-  # --- Postgres (primary relational + pgvector + Timescale + AGE later) ---
+  # --- Postgres (primary relational + pgvector; Timescale + AGE later) ---
+  # pgvector/pgvector:pg17 = official upstream PG 17 image with the vector
+  # extension preinstalled. Data layout is wire-compatible with stock
+  # postgres:17, so the named volume can be reused without reinit.
 
   db:
-    image: postgres:17
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -64,6 +67,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- TEI (Text Embeddings Inference — single embedding service, S72) -----
+  # Serves BAAI/bge-m3 (1024 dims, S71) over HTTP on :80. CPU image (no GPU
+  # on the VPS). First boot pulls the model (~2.3 GB) into the cache volume;
+  # until it is ready the server degrades to token-overlap ranking, so the
+  # server deliberately does NOT wait on tei health at startup.
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    restart: unless-stopped
+    command: ["--model-id", "BAAI/bge-m3", "--auto-truncate"]
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+    volumes:
+      - earthlink_tei:/data
+    networks: [earthlink]
+
   # --- EarthLink server (FastAPI + world tick loop + Ray actors) ----------
 
   server:
@@ -88,6 +107,11 @@ services:
       EARTHLINK_REDIS_URL: redis://redis:6379/0
       EARTHLINK_CHROMA_HOST: chroma
       EARTHLINK_CHROMA_PORT: 8000
+      # Pgvector cutover (S99): legacy per-agent Chroma path OFF. Agent memory
+      # is served by pgvector (S76/S77); this keeps Chroma out of the tick
+      # path so a wedged Chroma can no longer stall ticks (the S66 stall).
+      EARTHLINK_CHROMA_ENABLED: "false"
+      EARTHLINK_TEI_URL: http://tei:80
       # World tunables (sourced from .env, default if unset)
       EARTHLINK_AGENT_COUNT: ${EARTHLINK_AGENT_COUNT:-300}
       # World stream transport: WebTransport over QUIC
@@ -104,7 +128,11 @@ services:
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
-      chroma: {condition: service_healthy}
+      # Chroma is no longer on the per-agent path (S99), so the server must
+      # NOT gate startup on its health — a wedged/unhealthy Chroma blocking a
+      # server restart was a prior outage cause. Start-order only.
+      chroma: {condition: service_started}
+      tei: {condition: service_started}
     networks: [earthlink]
     deploy:
       resources:
@@ -158,5 +186,6 @@ volumes:
   earthlink_postgres:
   earthlink_redis:
   earthlink_chroma:
+  earthlink_tei:
   earthlink_caddy_data:
   earthlink_caddy_config:
