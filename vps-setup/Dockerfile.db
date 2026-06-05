@@ -1,0 +1,47 @@
+# Custom Postgres image for EarthLink — bundles all three extensions the app
+# needs: pgvector (agent memory, S73/S75) + TimescaleDB (telemetry, S83/S84) +
+# Apache AGE (social graph, S86/S87/S88).
+#
+# Built FROM pgvector/pgvector:pg17 — the *same* image production already runs
+# (official postgres:17 / Debian bookworm + pgvector). That matters: it keeps
+# PGDATA at /var/lib/postgresql/data and the postgres uid unchanged, so this is
+# a true drop-in over the existing earthlink_postgres volume. (The
+# timescale/timescaledb-ha image was rejected: it uses PGDATA=/home/postgres/
+# pgdata/data, so mounting the existing volume there is ignored and the DB comes
+# up EMPTY — verified locally. Do not switch the base image.)
+#
+# TimescaleDB also needs `shared_preload_libraries=timescaledb`; that is set in
+# the compose `command:` (works on the pre-existing data dir, where initdb does
+# not re-run). AGE loads on demand and needs no preload.
+#
+# Built locally / on the VPS via `build:` in the composes, like Dockerfile.caddy.
+
+FROM pgvector/pgvector:pg17
+
+USER root
+
+# --- TimescaleDB (Timescale's Debian apt repo) ---
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gnupg curl ca-certificates lsb-release; \
+    echo "deb https://packagecloud.io/timescale/timescaledb/debian/ $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/timescaledb.list; \
+    curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey \
+        | gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends timescaledb-2-postgresql-17; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- Apache AGE (compiled from source; no apt package for this PG build) ---
+ARG AGE_REF=release/PG17/1.7.0
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends build-essential git flex bison postgresql-server-dev-17; \
+    git clone --depth 1 --branch "${AGE_REF}" https://github.com/apache/age.git /tmp/age; \
+    make -C /tmp/age PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config; \
+    make -C /tmp/age PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config install; \
+    rm -rf /tmp/age; \
+    apt-get purge -y --auto-remove build-essential git flex bison postgresql-server-dev-17; \
+    rm -rf /var/lib/apt/lists/*
+
+USER postgres

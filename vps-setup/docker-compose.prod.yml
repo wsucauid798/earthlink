@@ -13,13 +13,27 @@
 
 services:
 
-  # --- Postgres (primary relational + pgvector; Timescale + AGE later) ---
-  # pgvector/pgvector:pg17 = official upstream PG 17 image with the vector
-  # extension preinstalled. Data layout is wire-compatible with stock
-  # postgres:17, so the named volume can be reused without reinit.
+  # --- Postgres (primary relational + pgvector + TimescaleDB + Apache AGE) ---
+  # Custom image (Dockerfile.db): pgvector/pgvector:pg17 — the SAME image prod
+  # already runs — with TimescaleDB + Apache AGE added on top. So all three
+  # extensions the app uses ship in one image — `vector` (c5e7a09f8b21),
+  # `timescaledb` (e1a4d7c93f52 / S83), `age` (a7e2c4f86d31 / S86) — while PGDATA
+  # (/var/lib/postgresql/data) and the postgres uid are unchanged, making this a
+  # true drop-in over the existing earthlink_postgres volume. Built on the VPS
+  # via `build:` like the caddy image (no CI/registry change).
+  # (timescale/timescaledb-ha was rejected: different PGDATA path → would ignore
+  # the existing volume and start EMPTY. Verified locally.)
+  # Validated locally 2026-06-05: old pgvector volume → this image → data intact
+  # + S83–S88 migrations apply. Still take a pg_dumpall backup before deploy.
 
   db:
-    image: pgvector/pgvector:pg17
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    image: earthlink/db:age
+    # TimescaleDB must be preloaded; set here so it applies to the pre-existing
+    # data dir (initdb does not re-run on an existing volume). AGE loads on demand.
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
